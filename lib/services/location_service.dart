@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:geolocator/geolocator.dart';
 
+import '../models/trip.dart';
 import '../models/trip_data.dart';
 
 class LocationService {
@@ -53,14 +54,13 @@ class LocationService {
     final double kmh = rawSpeed * 3.6;
 
     double deltaMeters = 0;
-    if (_lastPosition != null) {
+    if (_lastPosition != null && _data.isRecording) {
       final double delta = Geolocator.distanceBetween(
         _lastPosition!.latitude,
         _lastPosition!.longitude,
         position.latitude,
         position.longitude,
       );
-      // Skip GPS reconnect jumps and sub-2m noise while stationary
       if (delta <= 500) {
         if (delta >= 2.0 || kmh >= 1.0) {
           deltaMeters = delta;
@@ -69,7 +69,7 @@ class LocationService {
     }
     _lastPosition = position;
 
-    if (kmh > 1.0) {
+    if (_data.isRecording && kmh > 1.0) {
       _speedAccumulator += kmh;
       _sampleCount++;
     }
@@ -78,8 +78,8 @@ class LocationService {
 
     _data = _data.copyWith(
       currentSpeedKmh: kmh,
-      maxSpeedKmh: max(_data.maxSpeedKmh, kmh),
-      avgSpeedKmh: avg,
+      maxSpeedKmh: _data.isRecording ? max(_data.maxSpeedKmh, kmh) : _data.maxSpeedKmh,
+      avgSpeedKmh: _data.isRecording ? avg : _data.avgSpeedKmh,
       distanceMeters: _data.distanceMeters + deltaMeters,
       gpsAccuracy: position.accuracy,
       status: TripStatus.tracking,
@@ -87,7 +87,7 @@ class LocationService {
     _emit(_data);
   }
 
-  void resetTrip() {
+  void startTrip() {
     _lastPosition = null;
     _sampleCount = 0;
     _speedAccumulator = 0.0;
@@ -95,8 +95,37 @@ class LocationService {
       maxSpeedKmh: 0,
       avgSpeedKmh: 0,
       distanceMeters: 0,
+      isRecording: true,
+      recordingStartedAt: DateTime.now(),
     );
     _emit(_data);
+  }
+
+  Trip? stopTrip() {
+    if (!_data.isRecording || _data.recordingStartedAt == null) return null;
+
+    final trip = Trip(
+      id: _data.recordingStartedAt!.millisecondsSinceEpoch.toString(),
+      startTime: _data.recordingStartedAt!,
+      endTime: DateTime.now(),
+      maxSpeedKmh: _data.maxSpeedKmh,
+      avgSpeedKmh: _data.avgSpeedKmh,
+      distanceMeters: _data.distanceMeters,
+    );
+
+    _lastPosition = null;
+    _sampleCount = 0;
+    _speedAccumulator = 0.0;
+    _data = _data.copyWith(
+      maxSpeedKmh: 0,
+      avgSpeedKmh: 0,
+      distanceMeters: 0,
+      isRecording: false,
+      clearRecordingStart: true,
+    );
+    _emit(_data);
+
+    return trip;
   }
 
   Future<void> retryPermission() async {

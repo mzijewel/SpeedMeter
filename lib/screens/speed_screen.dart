@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 
 import '../models/trip_data.dart';
 import '../services/location_service.dart';
+import '../services/trip_storage_service.dart';
 import '../widgets/permission_prompt.dart';
 import '../widgets/speedometer_gauge.dart';
 import '../widgets/stats_row.dart';
+import 'trip_history_screen.dart';
 
 class SpeedScreen extends StatefulWidget {
   const SpeedScreen({super.key});
@@ -17,8 +19,12 @@ class SpeedScreen extends StatefulWidget {
 
 class _SpeedScreenState extends State<SpeedScreen> {
   late final LocationService _locationService;
+  final TripStorageService _storage = TripStorageService();
   StreamSubscription<TripData>? _subscription;
   TripData _tripData = TripData.initial();
+
+  Timer? _elapsedTimer;
+  Duration _elapsed = Duration.zero;
 
   @override
   void initState() {
@@ -32,15 +38,54 @@ class _SpeedScreenState extends State<SpeedScreen> {
 
   @override
   void dispose() {
+    _elapsedTimer?.cancel();
     _subscription?.cancel();
     _locationService.dispose();
     super.dispose();
+  }
+
+  void _onStartTrip() {
+    _locationService.startTrip();
+    setState(() => _elapsed = Duration.zero);
+    _elapsedTimer?.cancel();
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _elapsed += const Duration(seconds: 1));
+    });
+  }
+
+  Future<void> _onStopTrip() async {
+    _elapsedTimer?.cancel();
+    final trip = _locationService.stopTrip();
+    if (trip != null) {
+      await _storage.saveTrip(trip);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Trip saved — ${_formatDuration(trip.duration)}',
+              style: const TextStyle(color: Colors.white),
+            ),
+            backgroundColor: const Color(0xFF1A1A2E),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10)),
+          ),
+        );
+      }
+    }
   }
 
   Color _accuracyColor(double accuracy) {
     if (accuracy < 10) return const Color(0xFF00E676);
     if (accuracy < 30) return const Color(0xFFFFEB3B);
     return const Color(0xFFD50000);
+  }
+
+  String _formatDuration(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 
   @override
@@ -89,15 +134,17 @@ class _SpeedScreenState extends State<SpeedScreen> {
           ),
         ),
         _buildSpeedLabel(),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
+        if (_tripData.isRecording) _buildElapsedTimer(),
+        const SizedBox(height: 16),
         StatsRow(
           maxSpeedKmh: _tripData.maxSpeedKmh,
           avgSpeedKmh: _tripData.avgSpeedKmh,
           distanceMeters: _tripData.distanceMeters,
         ),
-        const SizedBox(height: 16),
-        _buildResetButton(),
-        const SizedBox(height: 16),
+        const SizedBox(height: 20),
+        _buildTripControls(),
+        const SizedBox(height: 20),
       ],
     );
   }
@@ -140,6 +187,16 @@ class _SpeedScreenState extends State<SpeedScreen> {
                   fontSize: 12,
                 ),
               ),
+              const SizedBox(width: 12),
+              GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const TripHistoryScreen()),
+                ),
+                child: const Icon(Icons.history_rounded,
+                    color: Color(0xFF9E9E9E), size: 22),
+              ),
             ],
           ),
         ],
@@ -172,15 +229,84 @@ class _SpeedScreenState extends State<SpeedScreen> {
     );
   }
 
-  Widget _buildResetButton() {
-    return TextButton(
-      onPressed: _locationService.resetTrip,
-      child: const Text(
-        'RESET TRIP',
-        style: TextStyle(
-          color: Color(0xFF9E9E9E),
-          fontSize: 13,
-          letterSpacing: 1.2,
+  Widget _buildElapsedTimer() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: const BoxDecoration(
+            shape: BoxShape.circle,
+            color: Color(0xFFD50000),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          _formatDuration(_elapsed),
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 1.5,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTripControls() {
+    if (_tripData.isRecording) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: _onStopTrip,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFD50000),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14)),
+            ),
+            child: const Text(
+              'STOP TRIP',
+              style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.0),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: SizedBox(
+        width: double.infinity,
+        child: ElevatedButton(
+          onPressed: _tripData.status == TripStatus.tracking
+              ? _onStartTrip
+              : null,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF00E676),
+            foregroundColor: Colors.black,
+            disabledBackgroundColor: const Color(0xFF2D2D44),
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14)),
+          ),
+          child: Text(
+            _tripData.status == TripStatus.tracking
+                ? 'START TRIP'
+                : 'WAITING FOR GPS',
+            style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.0),
+          ),
         ),
       ),
     );

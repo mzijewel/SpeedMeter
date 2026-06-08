@@ -13,6 +13,8 @@ class TripData {
   final double distanceMeters;
   final double gpsAccuracy;
   final TripStatus status;
+  final bool isRecording;
+  final DateTime? recordingStartedAt;
 
   const TripData({
     required this.currentSpeedKmh,
@@ -21,6 +23,8 @@ class TripData {
     required this.distanceMeters,
     required this.gpsAccuracy,
     required this.status,
+    this.isRecording = false,
+    this.recordingStartedAt,
   });
 
   factory TripData.initial() => const TripData(
@@ -30,6 +34,7 @@ class TripData {
         distanceMeters: 0,
         gpsAccuracy: 999,
         status: TripStatus.initializing,
+        isRecording: false,
       );
 
   TripData copyWith({
@@ -39,6 +44,9 @@ class TripData {
     double? distanceMeters,
     double? gpsAccuracy,
     TripStatus? status,
+    bool? isRecording,
+    DateTime? recordingStartedAt,
+    bool clearRecordingStart = false,
   }) {
     return TripData(
       currentSpeedKmh: currentSpeedKmh ?? this.currentSpeedKmh,
@@ -47,6 +55,10 @@ class TripData {
       distanceMeters: distanceMeters ?? this.distanceMeters,
       gpsAccuracy: gpsAccuracy ?? this.gpsAccuracy,
       status: status ?? this.status,
+      isRecording: isRecording ?? this.isRecording,
+      recordingStartedAt: clearRecordingStart
+          ? null
+          : (recordingStartedAt ?? this.recordingStartedAt),
     );
   }
 }
