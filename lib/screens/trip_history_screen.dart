@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/trip.dart';
 import '../services/trip_storage_service.dart';
+import 'trip_map_screen.dart';
 
 class TripHistoryScreen extends StatefulWidget {
   const TripHistoryScreen({super.key});
@@ -28,7 +29,7 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
 
   Future<void> _delete(String id) async {
     await _storage.deleteTrip(id);
-    setState(() => _trips.removeWhere((t) => t.id == id));
+    if (mounted) setState(() => _trips.removeWhere((t) => t.id == id));
   }
 
   Future<void> _clearAll() async {
@@ -96,6 +97,11 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
                   itemBuilder: (_, i) => _TripCard(
                     trip: _trips[i],
                     onDelete: () => _delete(_trips[i].id),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => TripMapScreen(trip: _trips[i]),
+                      ),
+                    ),
                   ),
                 ),
     );
@@ -123,8 +129,9 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
 class _TripCard extends StatelessWidget {
   final Trip trip;
   final VoidCallback onDelete;
+  final VoidCallback onTap;
 
-  const _TripCard({required this.trip, required this.onDelete});
+  const _TripCard({required this.trip, required this.onDelete, required this.onTap});
 
   String _formatDuration(Duration d) {
     final h = d.inHours;
@@ -153,6 +160,28 @@ class _TripCard extends StatelessWidget {
     return Dismissible(
       key: ValueKey(trip.id),
       direction: DismissDirection.endToStart,
+      confirmDismiss: (_) => showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: const Color(0xFF1A1A2E),
+          title: const Text('Delete this trip?',
+              style: TextStyle(color: Colors.white)),
+          content: const Text('This cannot be undone.',
+              style: TextStyle(color: Color(0xFF9E9E9E))),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('CANCEL',
+                  style: TextStyle(color: Color(0xFF9E9E9E))),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('DELETE',
+                  style: TextStyle(color: Color(0xFFD50000))),
+            ),
+          ],
+        ),
+      ),
       onDismissed: (_) => onDelete(),
       background: Container(
         alignment: Alignment.centerRight,
@@ -163,7 +192,10 @@ class _TripCard extends StatelessWidget {
         ),
         child: const Icon(Icons.delete_outline, color: Colors.white),
       ),
-      child: Container(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: const Color(0xFF1A1A2E),
@@ -205,7 +237,8 @@ class _TripCard extends StatelessWidget {
           ],
         ),
       ),
-    );
+    ),
+  );
   }
 }
 

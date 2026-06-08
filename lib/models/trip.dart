@@ -5,6 +5,7 @@ class Trip {
   final double maxSpeedKmh;
   final double avgSpeedKmh;
   final double distanceMeters;
+  final List<Map<String, double>> waypoints;
 
   const Trip({
     required this.id,
@@ -13,6 +14,7 @@ class Trip {
     required this.maxSpeedKmh,
     required this.avgSpeedKmh,
     required this.distanceMeters,
+    this.waypoints = const [],
   });
 
   Duration get duration => endTime.difference(startTime);
@@ -24,14 +26,30 @@ class Trip {
         'maxSpeedKmh': maxSpeedKmh,
         'avgSpeedKmh': avgSpeedKmh,
         'distanceMeters': distanceMeters,
+        'waypoints': waypoints,
       };
 
-  factory Trip.fromJson(Map<String, dynamic> json) => Trip(
-        id: json['id'] as String,
-        startTime: DateTime.parse(json['startTime'] as String),
-        endTime: DateTime.parse(json['endTime'] as String),
-        maxSpeedKmh: (json['maxSpeedKmh'] as num).toDouble(),
-        avgSpeedKmh: (json['avgSpeedKmh'] as num).toDouble(),
-        distanceMeters: (json['distanceMeters'] as num).toDouble(),
-      );
+  factory Trip.fromJson(Map<String, dynamic> json) {
+    final raw = json['waypoints'] as List<dynamic>?;
+    final waypoints = raw
+            ?.map((w) {
+              final m = w as Map<String, dynamic>;
+              return {
+                'lat': (m['lat'] as num).toDouble(),
+                'lng': (m['lng'] as num).toDouble(),
+              };
+            })
+            .toList() ??
+        [];
+
+    return Trip(
+      id: json['id'] as String,
+      startTime: DateTime.parse(json['startTime'] as String),
+      endTime: DateTime.parse(json['endTime'] as String),
+      maxSpeedKmh: (json['maxSpeedKmh'] as num).toDouble(),
+      avgSpeedKmh: (json['avgSpeedKmh'] as num).toDouble(),
+      distanceMeters: (json['distanceMeters'] as num).toDouble(),
+      waypoints: waypoints,
+    );
+  }
 }

@@ -15,6 +15,8 @@ class LocationService {
   int _sampleCount = 0;
   double _speedAccumulator = 0.0;
   StreamSubscription<Position>? _positionSub;
+  final List<Map<String, double>> _waypoints = [];
+  Map<String, double>? _lastWaypoint;
 
   Stream<TripData> get tripStream => _controller.stream;
 
@@ -69,6 +71,20 @@ class LocationService {
     }
     _lastPosition = position;
 
+    if (_data.isRecording) {
+      if (_lastWaypoint == null) {
+        _recordWaypoint(position);
+      } else {
+        final dist = Geolocator.distanceBetween(
+          _lastWaypoint!['lat']!,
+          _lastWaypoint!['lng']!,
+          position.latitude,
+          position.longitude,
+        );
+        if (dist >= 10) _recordWaypoint(position);
+      }
+    }
+
     if (_data.isRecording && kmh > 1.0) {
       _speedAccumulator += kmh;
       _sampleCount++;
@@ -87,10 +103,18 @@ class LocationService {
     _emit(_data);
   }
 
+  void _recordWaypoint(Position pos) {
+    final wp = {'lat': pos.latitude, 'lng': pos.longitude};
+    _waypoints.add(wp);
+    _lastWaypoint = wp;
+  }
+
   void startTrip() {
     _lastPosition = null;
     _sampleCount = 0;
     _speedAccumulator = 0.0;
+    _waypoints.clear();
+    _lastWaypoint = null;
     _data = _data.copyWith(
       maxSpeedKmh: 0,
       avgSpeedKmh: 0,
@@ -111,11 +135,14 @@ class LocationService {
       maxSpeedKmh: _data.maxSpeedKmh,
       avgSpeedKmh: _data.avgSpeedKmh,
       distanceMeters: _data.distanceMeters,
+      waypoints: List.from(_waypoints),
     );
 
     _lastPosition = null;
     _sampleCount = 0;
     _speedAccumulator = 0.0;
+    _waypoints.clear();
+    _lastWaypoint = null;
     _data = _data.copyWith(
       maxSpeedKmh: 0,
       avgSpeedKmh: 0,
