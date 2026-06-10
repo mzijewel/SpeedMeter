@@ -96,7 +96,8 @@ class _SpeedScreenState extends State<SpeedScreen> {
         child: switch (_tripData.status) {
           TripStatus.initializing => _buildLoading(),
           TripStatus.permissionDenied ||
-          TripStatus.permissionPermanentlyDenied =>
+          TripStatus.permissionPermanentlyDenied ||
+          TripStatus.locationServiceDisabled =>
             PermissionPrompt(
               status: _tripData.status,
               onRetry: () => _locationService.retryPermission(),

@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../models/trip.dart';
 import '../models/trip_data.dart';
@@ -15,17 +17,54 @@ class LocationService {
   int _sampleCount = 0;
   double _speedAccumulator = 0.0;
   StreamSubscription<Position>? _positionSub;
+  Timer? _fgsWatchdog;
   final List<Map<String, double>> _waypoints = [];
   Map<String, double>? _lastWaypoint;
 
   Stream<TripData> get tripStream => _controller.stream;
 
-  static const LocationSettings _locationSettings = LocationSettings(
-    accuracy: LocationAccuracy.bestForNavigation,
-    distanceFilter: 0,
-  );
+  static LocationSettings _buildLocationSettings({required bool recording}) {
+    if (Platform.isAndroid) {
+      return AndroidSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 0,
+        foregroundNotificationConfig: recording
+            ? const ForegroundNotificationConfig(
+                notificationText: 'Recording your trip...',
+                notificationTitle: 'Speed Meter',
+                enableWakeLock: true,
+                setOngoing: true,
+                notificationChannelName: 'Speed Meter Location',
+              )
+            : null,
+      );
+    }
+    if (Platform.isIOS) {
+      // allowBackgroundLocationUpdates is always true so the stream never
+      // needs to be restarted when recording starts. showBackgroundLocationIndicator
+      // shows the blue bar only while actively recording.
+      return AppleSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 0,
+        activityType: ActivityType.automotiveNavigation,
+        pauseLocationUpdatesAutomatically: false,
+        allowBackgroundLocationUpdates: true,
+        showBackgroundLocationIndicator: recording,
+      );
+    }
+    return const LocationSettings(
+      accuracy: LocationAccuracy.bestForNavigation,
+      distanceFilter: 0,
+    );
+  }
 
   Future<void> initialize() async {
+    final bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      _emit(_data.copyWith(status: TripStatus.locationServiceDisabled));
+      return;
+    }
+
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
@@ -40,18 +79,68 @@ class LocationService {
       return;
     }
 
+    // At this point we have at least "while in use". Reliable long-running
+    // background tracking needs "Always" (background) authorization:
+    //  - iOS suspends background location updates without "Always".
+    //  - Android 10+ needs ACCESS_BACKGROUND_LOCATION ("Allow all the time").
+    // Requesting again escalates whileInUse -> always (geolocator routes the
+    // user to the system dialog / settings page as required by the platform).
+    if (permission == LocationPermission.whileInUse) {
+      final LocationPermission upgraded = await Geolocator.requestPermission();
+      if (upgraded == LocationPermission.always) {
+        permission = upgraded;
+      }
+    }
+
+    // Android 13+ needs runtime notification permission for the
+    // foreground-service notification to actually show; a visible ongoing
+    // notification is what keeps the location service alive in the background.
+    // Also ask the OS to exempt us from battery optimization (Doze) so the
+    // foreground service is not throttled/killed during long trips. On
+    // aggressive OEM skins (Xiaomi/MIUI, etc.) the user must additionally
+    // enable "Autostart" and set battery usage to "No restrictions" by hand —
+    // those cannot be toggled programmatically.
+    if (Platform.isAndroid) {
+      await Permission.notification.request();
+      if (await Permission.ignoreBatteryOptimizations.isDenied) {
+        await Permission.ignoreBatteryOptimizations.request();
+      }
+    }
+
     _emit(_data.copyWith(status: TripStatus.noGpsFix));
-    _startStream();
+    await _startStream(recording: false);
   }
 
-  void _startStream() {
-    _positionSub?.cancel();
+  Future<void> _startStream({required bool recording}) async {
+    await _positionSub?.cancel();
+    _fgsWatchdog?.cancel();
     _positionSub = Geolocator.getPositionStream(
-      locationSettings: _locationSettings,
-    ).listen(_onPosition, onError: (_) {});
+      locationSettings: _buildLocationSettings(recording: recording),
+    ).listen(_onPosition, onError: (_) {
+      // The recording stream attaches an Android foreground service. On OEM
+      // skins that block the FGS (MIUI/Xiaomi, etc.) it errors out and stops
+      // delivering positions — fall back to a plain stream so the trip keeps
+      // recording in the foreground (_data.isRecording still drives distance).
+      if (recording && Platform.isAndroid) {
+        _startStream(recording: false);
+      } else {
+        _emit(_data.copyWith(status: TripStatus.noGpsFix));
+      }
+    });
+
+    // Some devices don't error — the FGS just never starts and the stream
+    // goes silent. If we were already getting fixes and none arrive shortly
+    // after a recording restart, fall back to a plain stream too.
+    if (recording && Platform.isAndroid &&
+        _data.status == TripStatus.tracking) {
+      _fgsWatchdog = Timer(const Duration(seconds: 8), () {
+        _startStream(recording: false);
+      });
+    }
   }
 
   void _onPosition(Position position) {
+    _fgsWatchdog?.cancel();
     final double rawSpeed = position.speed < 0 ? 0.0 : position.speed;
     final double kmh = rawSpeed * 3.6;
 
@@ -81,7 +170,7 @@ class LocationService {
           position.latitude,
           position.longitude,
         );
-        if (dist >= 10) _recordWaypoint(position);
+        if (dist >= 5) _recordWaypoint(position);
       }
     }
 
@@ -123,6 +212,10 @@ class LocationService {
       recordingStartedAt: DateTime.now(),
     );
     _emit(_data);
+    // Android needs a stream restart to attach the foreground service
+    // notification. iOS keeps the same stream (allowBackgroundLocationUpdates
+    // is already true from initialize()).
+    if (Platform.isAndroid) _startStream(recording: true);
   }
 
   Trip? stopTrip() {
@@ -151,6 +244,7 @@ class LocationService {
       clearRecordingStart: true,
     );
     _emit(_data);
+    if (Platform.isAndroid) _startStream(recording: false);
 
     return trip;
   }
@@ -168,6 +262,7 @@ class LocationService {
   }
 
   void dispose() {
+    _fgsWatchdog?.cancel();
     _positionSub?.cancel();
     _controller.close();
   }

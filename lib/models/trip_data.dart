@@ -2,6 +2,7 @@ enum TripStatus {
   initializing,
   permissionDenied,
   permissionPermanentlyDenied,
+  locationServiceDisabled,
   noGpsFix,
   tracking,
 }
