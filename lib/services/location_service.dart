@@ -3,20 +3,39 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:geolocator/geolocator.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:permission_handler/permission_handler.dart' hide ServiceStatus;
 
 import '../models/trip.dart';
 import '../models/trip_data.dart';
 
 class LocationService {
+  // Fixes with worse horizontal accuracy than this (indoor/network/cold-start
+  // fixes) produce garbage speed and distance, so they are ignored for both.
+  static const double _maxTrustedAccuracyMeters = 50.0;
+  // GPS doppler noise while standing still typically reads 0.5–2 km/h.
+  static const double _stationaryCutoffKmh = 2.0;
+  // Base exponential smoothing factor for the displayed speed. Kept high so the
+  // reading tracks the GPS within ~1-2 samples instead of lagging several
+  // seconds; small jitter is still damped, while large changes (real accel /
+  // braking) snap almost instantly via _snapAlpha below.
+  static const double _smoothingAlpha = 0.6;
+  // When the new reading differs from the displayed one by more than this, the
+  // change is real movement, not noise — apply much heavier weighting so the
+  // speedometer responds immediately.
+  static const double _snapDeltaKmh = 4.0;
+  static const double _snapAlpha = 0.9;
+
   final StreamController<TripData> _controller =
       StreamController<TripData>.broadcast();
 
   TripData _data = TripData.initial();
+  double _smoothedKmh = 0.0;
   Position? _lastPosition;
+  DateTime? _lastFixTime;
   int _sampleCount = 0;
   double _speedAccumulator = 0.0;
   StreamSubscription<Position>? _positionSub;
+  StreamSubscription<ServiceStatus>? _serviceStatusSub;
   Timer? _fgsWatchdog;
   final List<Map<String, double>> _waypoints = [];
   Map<String, double>? _lastWaypoint;
@@ -28,6 +47,9 @@ class LocationService {
       return AndroidSettings(
         accuracy: LocationAccuracy.bestForNavigation,
         distanceFilter: 0,
+        // Ask for the fastest fixes the hardware will give (the default
+        // interval can be several seconds, which is the main source of lag).
+        intervalDuration: const Duration(milliseconds: 1000),
         foregroundNotificationConfig: recording
             ? const ForegroundNotificationConfig(
                 notificationText: 'Recording your trip...',
@@ -59,6 +81,7 @@ class LocationService {
   }
 
   Future<void> initialize() async {
+    _watchServiceStatus();
     final bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       _emit(_data.copyWith(status: TripStatus.locationServiceDisabled));
@@ -108,30 +131,54 @@ class LocationService {
     }
 
     _emit(_data.copyWith(status: TripStatus.noGpsFix));
-    await _startStream(recording: false);
+    // Preserve the recording stream config if GPS was toggled mid-trip.
+    await _startStream(recording: _data.isRecording);
+  }
+
+  // GPS can be toggled at any time; instead of staying stuck on the disabled
+  // status, drop the position stream while it's off and re-initialize as soon
+  // as the user turns it back on.
+  void _watchServiceStatus() {
+    _serviceStatusSub ??= Geolocator.getServiceStatusStream().listen((
+      ServiceStatus status,
+    ) {
+      if (status == ServiceStatus.enabled) {
+        initialize();
+      } else {
+        _fgsWatchdog?.cancel();
+        _positionSub?.cancel();
+        _positionSub = null;
+        _emit(_data.copyWith(status: TripStatus.locationServiceDisabled));
+      }
+    });
   }
 
   Future<void> _startStream({required bool recording}) async {
     await _positionSub?.cancel();
     _fgsWatchdog?.cancel();
-    _positionSub = Geolocator.getPositionStream(
-      locationSettings: _buildLocationSettings(recording: recording),
-    ).listen(_onPosition, onError: (_) {
-      // The recording stream attaches an Android foreground service. On OEM
-      // skins that block the FGS (MIUI/Xiaomi, etc.) it errors out and stops
-      // delivering positions — fall back to a plain stream so the trip keeps
-      // recording in the foreground (_data.isRecording still drives distance).
-      if (recording && Platform.isAndroid) {
-        _startStream(recording: false);
-      } else {
-        _emit(_data.copyWith(status: TripStatus.noGpsFix));
-      }
-    });
+    _positionSub =
+        Geolocator.getPositionStream(
+          locationSettings: _buildLocationSettings(recording: recording),
+        ).listen(
+          _onPosition,
+          onError: (_) {
+            // The recording stream attaches an Android foreground service. On OEM
+            // skins that block the FGS (MIUI/Xiaomi, etc.) it errors out and stops
+            // delivering positions — fall back to a plain stream so the trip keeps
+            // recording in the foreground (_data.isRecording still drives distance).
+            if (recording && Platform.isAndroid) {
+              _startStream(recording: false);
+            } else {
+              _emit(_data.copyWith(status: TripStatus.noGpsFix));
+            }
+          },
+        );
 
     // Some devices don't error — the FGS just never starts and the stream
     // goes silent. If we were already getting fixes and none arrive shortly
     // after a recording restart, fall back to a plain stream too.
-    if (recording && Platform.isAndroid &&
+    if (recording &&
+        Platform.isAndroid &&
         _data.status == TripStatus.tracking) {
       _fgsWatchdog = Timer(const Duration(seconds: 8), () {
         _startStream(recording: false);
@@ -141,26 +188,68 @@ class LocationService {
 
   void _onPosition(Position position) {
     _fgsWatchdog?.cancel();
-    final double rawSpeed = position.speed < 0 ? 0.0 : position.speed;
-    final double kmh = rawSpeed * 3.6;
+    final bool trustedFix = position.accuracy <= _maxTrustedAccuracyMeters;
 
+    // Doppler speed straight from the GPS chip (m/s). Negative means the device
+    // couldn't compute it. We trust it as-is — it's far more precise than
+    // differentiating position — and only reject it on an untrusted fix. The
+    // stationary cutoff below removes standing-still noise; comparing against
+    // speedAccuracy here was too aggressive and zeroed out real low speeds.
+    final bool hasDopplerSpeed = position.speed >= 0;
+    double speedMps = trustedFix && hasDopplerSpeed ? position.speed : 0.0;
+
+    double kmh = speedMps * 3.6;
+    if (kmh < _stationaryCutoffKmh) {
+      kmh = 0.0;
+      speedMps = 0.0;
+    }
+
+    final double diff = kmh - _smoothedKmh;
+    final double alpha = diff.abs() >= _snapDeltaKmh
+        ? _snapAlpha
+        : _smoothingAlpha;
+    _smoothedKmh += alpha * diff;
+    if (_smoothedKmh < 0.5) _smoothedKmh = 0.0;
+    final double displayKmh = _smoothedKmh;
+
+    // Distance from point-to-point displacement, with jitter and jump filters.
+    // (Doppler-velocity integration was unreliable here — many devices don't
+    // advance position.timestamp between fixes, so the time delta read as 0.)
     double deltaMeters = 0;
-    if (_lastPosition != null && _data.isRecording) {
-      final double delta = Geolocator.distanceBetween(
+    final DateTime fixTime = position.timestamp;
+    if (trustedFix && _lastPosition != null && _data.isRecording) {
+      final double dPos = Geolocator.distanceBetween(
         _lastPosition!.latitude,
         _lastPosition!.longitude,
         position.latitude,
         position.longitude,
       );
-      if (delta <= 500) {
-        if (delta >= 2.0 || kmh >= 1.0) {
-          deltaMeters = delta;
-        }
-      }
-    }
-    _lastPosition = position;
 
-    if (_data.isRecording) {
+      // Reject single-fix jumps that are physically impossible. Use the time
+      // gap when the platform gives usable timestamps; otherwise fall back to a
+      // hard distance cap so one wild fix can't inject a phantom kilometre.
+      final double dt = _lastFixTime != null
+          ? fixTime.difference(_lastFixTime!).inMilliseconds / 1000.0
+          : 0.0;
+      final bool plausible = dt > 0 ? (dPos / dt) <= 70 : dPos <= 150;
+
+      // Movement is real when the doppler speed confirms motion, or when the
+      // displacement clearly exceeds the GPS noise floor. This drops the
+      // metre-scale jitter that piles up while stopped without losing slow
+      // genuine movement.
+      final double noiseFloor = max(8.0, position.accuracy * 0.5);
+      final bool moving = kmh >= _stationaryCutoffKmh || dPos >= noiseFloor;
+
+      if (plausible && moving) deltaMeters = dPos;
+    }
+    // Untrusted fixes don't advance the anchors either — otherwise a single
+    // indoor fix injects a phantom round-trip into the total.
+    if (trustedFix) {
+      _lastPosition = position;
+      _lastFixTime = fixTime;
+    }
+
+    if (trustedFix && _data.isRecording) {
       if (_lastWaypoint == null) {
         _recordWaypoint(position);
       } else {
@@ -174,16 +263,19 @@ class LocationService {
       }
     }
 
-    if (_data.isRecording && kmh > 1.0) {
-      _speedAccumulator += kmh;
+    if (_data.isRecording && displayKmh > 1.0) {
+      _speedAccumulator += displayKmh;
       _sampleCount++;
     }
-    final double avg =
-        _sampleCount > 0 ? _speedAccumulator / _sampleCount : 0.0;
+    final double avg = _sampleCount > 0
+        ? _speedAccumulator / _sampleCount
+        : 0.0;
 
     _data = _data.copyWith(
-      currentSpeedKmh: kmh,
-      maxSpeedKmh: _data.isRecording ? max(_data.maxSpeedKmh, kmh) : _data.maxSpeedKmh,
+      currentSpeedKmh: displayKmh,
+      maxSpeedKmh: _data.isRecording
+          ? max(_data.maxSpeedKmh, displayKmh)
+          : _data.maxSpeedKmh,
       avgSpeedKmh: _data.isRecording ? avg : _data.avgSpeedKmh,
       distanceMeters: _data.distanceMeters + deltaMeters,
       gpsAccuracy: position.accuracy,
@@ -200,6 +292,7 @@ class LocationService {
 
   void startTrip() {
     _lastPosition = null;
+    _lastFixTime = null;
     _sampleCount = 0;
     _speedAccumulator = 0.0;
     _waypoints.clear();
@@ -232,6 +325,7 @@ class LocationService {
     );
 
     _lastPosition = null;
+    _lastFixTime = null;
     _sampleCount = 0;
     _speedAccumulator = 0.0;
     _waypoints.clear();
@@ -263,6 +357,7 @@ class LocationService {
 
   void dispose() {
     _fgsWatchdog?.cancel();
+    _serviceStatusSub?.cancel();
     _positionSub?.cancel();
     _controller.close();
   }

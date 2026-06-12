@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../models/trip_data.dart';
 import '../services/location_service.dart';
@@ -96,12 +97,13 @@ class _SpeedScreenState extends State<SpeedScreen> {
         child: switch (_tripData.status) {
           TripStatus.initializing => _buildLoading(),
           TripStatus.permissionDenied ||
-          TripStatus.permissionPermanentlyDenied ||
-          TripStatus.locationServiceDisabled =>
+          TripStatus.permissionPermanentlyDenied =>
             PermissionPrompt(
               status: _tripData.status,
               onRetry: () => _locationService.retryPermission(),
             ),
+          // GPS off is not a dead end: show the normal screen with the
+          // start button disabled and a banner to enable GPS.
           _ => _buildTrackingScreen(),
         },
       ),
@@ -124,10 +126,13 @@ class _SpeedScreenState extends State<SpeedScreen> {
     );
   }
 
+  bool get _gpsOff => _tripData.status == TripStatus.locationServiceDisabled;
+
   Widget _buildTrackingScreen() {
     return Column(
       children: [
         _buildHeader(),
+        if (_gpsOff) _buildGpsOffBanner(),
         Expanded(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -147,6 +152,49 @@ class _SpeedScreenState extends State<SpeedScreen> {
         _buildTripControls(),
         const SizedBox(height: 20),
       ],
+    );
+  }
+
+  Widget _buildGpsOffBanner() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFFD50000).withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+              color: const Color(0xFFD50000).withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.gps_off_rounded,
+                color: Color(0xFFD50000), size: 18),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                'GPS is turned off',
+                style: TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
+            TextButton(
+              onPressed: () => Geolocator.openLocationSettings(),
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFF00E676),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text(
+                'ENABLE',
+                style:
+                    TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -173,16 +221,18 @@ class _SpeedScreenState extends State<SpeedScreen> {
                 height: 8,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: noFix
+                  color: (noFix || _gpsOff)
                       ? const Color(0xFFD50000)
                       : _accuracyColor(_tripData.gpsAccuracy),
                 ),
               ),
               const SizedBox(width: 6),
               Text(
-                noFix
-                    ? 'Searching...'
-                    : '±${_tripData.gpsAccuracy.toStringAsFixed(0)}m',
+                _gpsOff
+                    ? 'GPS off'
+                    : noFix
+                        ? 'Searching...'
+                        : '±${_tripData.gpsAccuracy.toStringAsFixed(0)}m',
                 style: const TextStyle(
                   color: Color(0xFF9E9E9E),
                   fontSize: 12,
@@ -302,7 +352,9 @@ class _SpeedScreenState extends State<SpeedScreen> {
           child: Text(
             _tripData.status == TripStatus.tracking
                 ? 'START TRIP'
-                : 'WAITING FOR GPS',
+                : _gpsOff
+                    ? 'GPS IS OFF'
+                    : 'WAITING FOR GPS',
             style: const TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w700,
