@@ -234,6 +234,14 @@ class _TripCard extends StatelessWidget {
                 _Stat(label: 'AVG SPEED', value: '${trip.avgSpeedKmh.toStringAsFixed(1)} km/h'),
               ],
             ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                _Stat(label: 'MOVING', value: _formatDuration(trip.movingDuration)),
+                _Stat(label: 'PAUSED', value: _formatDuration(trip.pausedDuration)),
+                const _Stat(label: '', value: ''),
+              ],
+            ),
           ],
         ),
       ),

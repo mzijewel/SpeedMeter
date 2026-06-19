@@ -6,6 +6,9 @@ class Trip {
   final double avgSpeedKmh;
   final double distanceMeters;
   final List<Map<String, double>> waypoints;
+  // Time the vehicle was actually moving (covering ground) during the trip.
+  // Paused time is derived as duration - moving so it can't drift out of sync.
+  final Duration movingDuration;
 
   const Trip({
     required this.id,
@@ -15,9 +18,16 @@ class Trip {
     required this.avgSpeedKmh,
     required this.distanceMeters,
     this.waypoints = const [],
+    this.movingDuration = Duration.zero,
   });
 
   Duration get duration => endTime.difference(startTime);
+
+  // Time the vehicle spent stationary.
+  Duration get pausedDuration {
+    final paused = duration - movingDuration;
+    return paused.isNegative ? Duration.zero : paused;
+  }
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -27,6 +37,7 @@ class Trip {
         'avgSpeedKmh': avgSpeedKmh,
         'distanceMeters': distanceMeters,
         'waypoints': waypoints,
+        'movingMillis': movingDuration.inMilliseconds,
       };
 
   factory Trip.fromJson(Map<String, dynamic> json) {
@@ -50,6 +61,9 @@ class Trip {
       avgSpeedKmh: (json['avgSpeedKmh'] as num).toDouble(),
       distanceMeters: (json['distanceMeters'] as num).toDouble(),
       waypoints: waypoints,
+      movingDuration: Duration(
+        milliseconds: (json['movingMillis'] as num?)?.toInt() ?? 0,
+      ),
     );
   }
 }

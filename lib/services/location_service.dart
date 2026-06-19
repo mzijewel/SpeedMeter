@@ -34,6 +34,8 @@ class LocationService {
   DateTime? _lastFixTime;
   int _sampleCount = 0;
   double _speedAccumulator = 0.0;
+  int _movingMillis = 0;
+  DateTime? _lastSampleWallTime;
   StreamSubscription<Position>? _positionSub;
   StreamSubscription<ServiceStatus>? _serviceStatusSub;
   Timer? _fgsWatchdog;
@@ -271,6 +273,19 @@ class LocationService {
         ? _speedAccumulator / _sampleCount
         : 0.0;
 
+    // Accumulate "moving" time from the wall-clock gap between fixes, but only
+    // when this fix actually covered ground (deltaMeters > 0) — the same signal
+    // that grows the distance. Paused time is then derived as elapsed - moving
+    // by the UI / Trip, so it stays correct even when GPS fixes are sparse
+    // (no fixes => no moving time => everything counts as paused). The gap is
+    // capped so a GPS dropout can't dump a large block into the moving total.
+    final DateTime now = DateTime.now();
+    if (_data.isRecording && _lastSampleWallTime != null && deltaMeters > 0) {
+      final int gapMs = now.difference(_lastSampleWallTime!).inMilliseconds;
+      if (gapMs > 0) _movingMillis += gapMs.clamp(0, 5000);
+    }
+    _lastSampleWallTime = now;
+
     _data = _data.copyWith(
       currentSpeedKmh: displayKmh,
       maxSpeedKmh: _data.isRecording
@@ -280,6 +295,7 @@ class LocationService {
       distanceMeters: _data.distanceMeters + deltaMeters,
       gpsAccuracy: position.accuracy,
       status: TripStatus.tracking,
+      movingDuration: Duration(milliseconds: _movingMillis),
     );
     _emit(_data);
   }
@@ -295,6 +311,8 @@ class LocationService {
     _lastFixTime = null;
     _sampleCount = 0;
     _speedAccumulator = 0.0;
+    _movingMillis = 0;
+    _lastSampleWallTime = null;
     _waypoints.clear();
     _lastWaypoint = null;
     _data = _data.copyWith(
@@ -303,6 +321,7 @@ class LocationService {
       distanceMeters: 0,
       isRecording: true,
       recordingStartedAt: DateTime.now(),
+      movingDuration: Duration.zero,
     );
     _emit(_data);
     // Android needs a stream restart to attach the foreground service
@@ -322,12 +341,15 @@ class LocationService {
       avgSpeedKmh: _data.avgSpeedKmh,
       distanceMeters: _data.distanceMeters,
       waypoints: List.from(_waypoints),
+      movingDuration: Duration(milliseconds: _movingMillis),
     );
 
     _lastPosition = null;
     _lastFixTime = null;
     _sampleCount = 0;
     _speedAccumulator = 0.0;
+    _movingMillis = 0;
+    _lastSampleWallTime = null;
     _waypoints.clear();
     _lastWaypoint = null;
     _data = _data.copyWith(
@@ -336,6 +358,7 @@ class LocationService {
       distanceMeters: 0,
       isRecording: false,
       clearRecordingStart: true,
+      movingDuration: Duration.zero,
     );
     _emit(_data);
     if (Platform.isAndroid) _startStream(recording: false);

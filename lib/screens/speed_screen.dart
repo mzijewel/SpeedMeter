@@ -281,8 +281,15 @@ class _SpeedScreenState extends State<SpeedScreen> {
   }
 
   Widget _buildElapsedTimer() {
+    final bool stationary = _tripData.currentSpeedKmh == 0;
+    // Paused time is whatever elapsed time wasn't spent moving. Deriving it
+    // this way (rather than counting stopped seconds) keeps moving + paused
+    // equal to the total even when GPS fixes are sparse.
+    final Duration paused = _elapsed - _tripData.movingDuration;
+    final Duration pausedClamped = paused.isNegative ? Duration.zero : paused;
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         Container(
           width: 8,
@@ -297,6 +304,22 @@ class _SpeedScreenState extends State<SpeedScreen> {
           _formatDuration(_elapsed),
           style: const TextStyle(
             color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 1.5,
+          ),
+        ),
+        const SizedBox(width: 16),
+        Icon(
+          Icons.pause_circle_outline_rounded,
+          size: 16,
+          color: stationary ? const Color(0xFFFFC107) : const Color(0xFF9E9E9E),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          _formatDuration(pausedClamped),
+          style: TextStyle(
+            color: stationary ? const Color(0xFFFFC107) : const Color(0xFF9E9E9E),
             fontSize: 18,
             fontWeight: FontWeight.w500,
             letterSpacing: 1.5,

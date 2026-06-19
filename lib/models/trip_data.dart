@@ -16,6 +16,10 @@ class TripData {
   final TripStatus status;
   final bool isRecording;
   final DateTime? recordingStartedAt;
+  // Accumulated time the vehicle was actually moving (covering ground) during
+  // the current recording. Paused time is derived as elapsed - moving so it
+  // stays correct even when GPS fixes are sparse.
+  final Duration movingDuration;
 
   const TripData({
     required this.currentSpeedKmh,
@@ -26,6 +30,7 @@ class TripData {
     required this.status,
     this.isRecording = false,
     this.recordingStartedAt,
+    this.movingDuration = Duration.zero,
   });
 
   factory TripData.initial() => const TripData(
@@ -48,6 +53,7 @@ class TripData {
     bool? isRecording,
     DateTime? recordingStartedAt,
     bool clearRecordingStart = false,
+    Duration? movingDuration,
   }) {
     return TripData(
       currentSpeedKmh: currentSpeedKmh ?? this.currentSpeedKmh,
@@ -60,6 +66,7 @@ class TripData {
       recordingStartedAt: clearRecordingStart
           ? null
           : (recordingStartedAt ?? this.recordingStartedAt),
+      movingDuration: movingDuration ?? this.movingDuration,
     );
   }
 }
