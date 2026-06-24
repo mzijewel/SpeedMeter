@@ -1,4 +1,9 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../models/trip.dart';
 import '../services/trip_storage_service.dart';
@@ -61,6 +66,58 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
     }
   }
 
+  Future<void> _share() async {
+    try {
+      final json = await _storage.exportJson();
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/trip_history.json');
+      await file.writeAsString(json);
+      await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'application/json')],
+        subject: 'Trip History',
+      );
+    } catch (e) {
+      _showSnack('Could not share trips: $e');
+    }
+  }
+
+  Future<void> _restore() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      final picked = result.files.single;
+      final bytes = picked.bytes;
+      final content = bytes != null
+          ? String.fromCharCodes(bytes)
+          : await File(picked.path!).readAsString();
+
+      final added = await _storage.importJson(content);
+      await _load();
+      _showSnack(added > 0
+          ? 'Restored $added trip${added == 1 ? '' : 's'}.'
+          : 'No new trips to restore.');
+    } on FormatException catch (e) {
+      _showSnack('Invalid trip file: ${e.message}');
+    } catch (e) {
+      _showSnack('Could not restore trips: $e');
+    }
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: const Color(0xFF1A1A2E),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -77,12 +134,49 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
           ),
         ),
         actions: [
-          if (_trips.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.delete_sweep_outlined),
-              tooltip: 'Clear all',
-              onPressed: _clearAll,
-            ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            color: const Color(0xFF1A1A2E),
+            onSelected: (value) {
+              switch (value) {
+                case 'share':
+                  _share();
+                  break;
+                case 'restore':
+                  _restore();
+                  break;
+                case 'clear':
+                  _clearAll();
+                  break;
+              }
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'share',
+                enabled: _trips.isNotEmpty,
+                child: const _MenuRow(
+                  icon: Icons.ios_share,
+                  label: 'Share',
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'restore',
+                child: _MenuRow(
+                  icon: Icons.restore,
+                  label: 'Restore',
+                ),
+              ),
+              PopupMenuItem(
+                value: 'clear',
+                enabled: _trips.isNotEmpty,
+                child: const _MenuRow(
+                  icon: Icons.delete_sweep_outlined,
+                  label: 'Clear all',
+                  color: Color(0xFFD50000),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
       body: _loading
@@ -247,6 +341,29 @@ class _TripCard extends StatelessWidget {
       ),
     ),
   );
+  }
+}
+
+class _MenuRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  const _MenuRow({
+    required this.icon,
+    required this.label,
+    this.color = Colors.white,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: color),
+        const SizedBox(width: 12),
+        Text(label, style: TextStyle(color: color)),
+      ],
+    );
   }
 }
 
