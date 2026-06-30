@@ -99,9 +99,12 @@ class _TripMapScreenState extends State<TripMapScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF0D0D1A),
         foregroundColor: Colors.white,
-        title: const Text(
-          'TRIP ROUTE',
-          style: TextStyle(
+        title: Text(
+          (widget.trip.title != null && widget.trip.title!.isNotEmpty)
+              ? widget.trip.title!
+              : 'TRIP ROUTE',
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w700,
             letterSpacing: 2.0,

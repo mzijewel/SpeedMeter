@@ -9,6 +9,8 @@ class Trip {
   // Time the vehicle was actually moving (covering ground) during the trip.
   // Paused time is derived as duration - moving so it can't drift out of sync.
   final Duration movingDuration;
+  // Optional user-given name for the trip. Null means no title was set.
+  final String? title;
 
   const Trip({
     required this.id,
@@ -19,7 +21,20 @@ class Trip {
     required this.distanceMeters,
     this.waypoints = const [],
     this.movingDuration = Duration.zero,
+    this.title,
   });
+
+  Trip copyWith({String? title}) => Trip(
+        id: id,
+        startTime: startTime,
+        endTime: endTime,
+        maxSpeedKmh: maxSpeedKmh,
+        avgSpeedKmh: avgSpeedKmh,
+        distanceMeters: distanceMeters,
+        waypoints: waypoints,
+        movingDuration: movingDuration,
+        title: title ?? this.title,
+      );
 
   Duration get duration => endTime.difference(startTime);
 
@@ -38,6 +53,7 @@ class Trip {
         'distanceMeters': distanceMeters,
         'waypoints': waypoints,
         'movingMillis': movingDuration.inMilliseconds,
+        'title': title,
       };
 
   factory Trip.fromJson(Map<String, dynamic> json) {
@@ -64,6 +80,7 @@ class Trip {
       movingDuration: Duration(
         milliseconds: (json['movingMillis'] as num?)?.toInt() ?? 0,
       ),
+      title: json['title'] as String?,
     );
   }
 }

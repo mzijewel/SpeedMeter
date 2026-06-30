@@ -23,6 +23,20 @@ class TripStorageService {
     await prefs.setStringList(_key, raw);
   }
 
+  Future<void> updateTrip(Trip trip) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_key) ?? [];
+    final encoded = jsonEncode(trip.toJson());
+    for (var i = 0; i < raw.length; i++) {
+      final map = jsonDecode(raw[i]) as Map<String, dynamic>;
+      if (map['id'] == trip.id) {
+        raw[i] = encoded;
+        break;
+      }
+    }
+    await prefs.setStringList(_key, raw);
+  }
+
   Future<void> deleteTrip(String id) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getStringList(_key) ?? [];

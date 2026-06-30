@@ -9,6 +9,7 @@ import '../services/trip_storage_service.dart';
 import '../widgets/permission_prompt.dart';
 import '../widgets/speedometer_gauge.dart';
 import '../widgets/stats_row.dart';
+import '../widgets/title_input_dialog.dart';
 import 'trip_history_screen.dart';
 
 class SpeedScreen extends StatefulWidget {
@@ -58,7 +59,14 @@ class _SpeedScreenState extends State<SpeedScreen> {
     _elapsedTimer?.cancel();
     final trip = _locationService.stopTrip();
     if (trip != null) {
-      await _storage.saveTrip(trip);
+      String? title;
+      if (mounted) {
+        title = await showTitleDialog(context);
+      }
+      final toSave = (title != null && title.isNotEmpty)
+          ? trip.copyWith(title: title)
+          : trip;
+      await _storage.saveTrip(toSave);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

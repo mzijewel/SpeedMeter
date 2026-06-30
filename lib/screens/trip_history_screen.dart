@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/trip.dart';
 import '../services/trip_storage_service.dart';
+import '../widgets/title_input_dialog.dart';
 import 'trip_map_screen.dart';
 
 class TripHistoryScreen extends StatefulWidget {
@@ -35,6 +36,29 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
   Future<void> _delete(String id) async {
     await _storage.deleteTrip(id);
     if (mounted) setState(() => _trips.removeWhere((t) => t.id == id));
+  }
+
+  Future<void> _rename(Trip trip) async {
+    final title = await showTitleDialog(context, initial: trip.title);
+    if (title == null) return;
+    final updated = Trip(
+      id: trip.id,
+      startTime: trip.startTime,
+      endTime: trip.endTime,
+      maxSpeedKmh: trip.maxSpeedKmh,
+      avgSpeedKmh: trip.avgSpeedKmh,
+      distanceMeters: trip.distanceMeters,
+      waypoints: trip.waypoints,
+      movingDuration: trip.movingDuration,
+      title: title.isEmpty ? null : title,
+    );
+    await _storage.updateTrip(updated);
+    if (mounted) {
+      setState(() {
+        final i = _trips.indexWhere((t) => t.id == trip.id);
+        if (i != -1) _trips[i] = updated;
+      });
+    }
   }
 
   Future<void> _clearAll() async {
@@ -191,6 +215,7 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
                   itemBuilder: (_, i) => _TripCard(
                     trip: _trips[i],
                     onDelete: () => _delete(_trips[i].id),
+                    onRename: () => _rename(_trips[i]),
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (_) => TripMapScreen(trip: _trips[i]),
@@ -223,9 +248,17 @@ class _TripHistoryScreenState extends State<TripHistoryScreen> {
 class _TripCard extends StatelessWidget {
   final Trip trip;
   final VoidCallback onDelete;
+  final VoidCallback onRename;
   final VoidCallback onTap;
 
-  const _TripCard({required this.trip, required this.onDelete, required this.onTap});
+  const _TripCard({
+    required this.trip,
+    required this.onDelete,
+    required this.onRename,
+    required this.onTap,
+  });
+
+  bool get _hasTitle => trip.title != null && trip.title!.isNotEmpty;
 
   String _formatDuration(Duration d) {
     final h = d.inHours;
@@ -300,16 +333,52 @@ class _TripCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  _formatDate(trip.startTime),
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                Expanded(
+                  child: _hasTitle
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              trip.title!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _formatDate(trip.startTime),
+                              style: const TextStyle(
+                                color: Color(0xFF9E9E9E),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        )
+                      : Text(
+                          _formatDate(trip.startTime),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: onRename,
+                  child: const Padding(
+                    padding: EdgeInsets.only(right: 4),
+                    child: Icon(Icons.edit_outlined,
+                        color: Color(0xFF9E9E9E), size: 18),
                   ),
                 ),
+                const SizedBox(width: 8),
                 Text(
                   _formatDuration(trip.duration),
                   style: const TextStyle(
